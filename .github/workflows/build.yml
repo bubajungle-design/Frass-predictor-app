@@ -2,28 +2,88 @@ name: Build Android APK (Frass Predictor)
 
 on:
   workflow_dispatch:
+  push:
+    paths:
+      - 'FrassPredictorApp.zip'
+      - '.github/workflows/build.yml'
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    # image contains Android SDK + NDK + build-tools + Gradle already
-    container: alvrme/alpine-android:android-34-jdk17
+
+    env:
+      ANDROID_SDK_ROOT: ${{ github.workspace }}/android-sdk
+      ANDROID_HOME: ${{ github.workspace }}/android-sdk
+      JAVA_HOME: /usr/lib/jvm/temurin-17-jdk-amd64
+      # Add sdkmanager & platform-tools to PATH once installed
+      PATH: ${{ github.workspace }}/android-sdk/cmdline-tools/latest/bin:${{ github.workspace }}/android-sdk/platform-tools:${{ env.PATH }}
 
     steps:
-      - name: Checkout code
+      - name: Checkout repo
         uses: actions/checkout@v4
 
-      - name: Install unzip
-        run: apk add --no-cache unzip bash
+      - name: Install system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y unzip curl zip
 
-      - name: Unzip project
+      - name: Unzip Android project
         run: unzip -q FrassPredictorApp.zip
 
-      - name: Build APK
+      # Ensure plugin versions are defined (AGP + Kotlin); this overwrites settings.gradle.kts on purpose
+      - name: Pin Android Gradle Plugin & Kotlin versions
         working-directory: FrassPredictorApp
-        run: ./gradlew assembleDebug || gradle assembleDebug
+        run: |
+          cat > settings.gradle.kts <<'EOF'
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+              plugins {
+                  id("com.android.application") version "8.6.1"
+                  id("org.jetbrains.kotlin.android") version "1.9.24"
+              }
+          }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+          rootProject.name = "FrassPredictorApp"
+          include(":app")
+          EOF
 
-      - name: Upload APK
+      # Install official Android commandline tools, then move them to .../cmdline-tools/latest (correct path for sdkmanager)
+      - name: Install Android SDK (cmdline-tools, platforms, build-tools)
+        run: |
+          mkdir -p "$ANDROID_SDK_ROOT/cmdline-tools"
+          TOOLS_ZIP="$RUNNER_TEMP/commandlinetools-linux.zip"
+          curl -sSL -o "$TOOLS_ZIP" https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
+          unzip -q "$TOOLS_ZIP" -d "$ANDROID_SDK_ROOT/cmdline-tools"
+          # Zip unpacks into "cmdline-tools" folder; rename to "latest" so sdkmanager path exists
+          mv "$ANDROID_SDK_ROOT/cmdline-tools/cmdline-tools" "$ANDROID_SDK_ROOT/cmdline-tools/latest"
+
+          yes | "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$ANDROID_SDK_ROOT" --licenses
+          "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$ANDROID_SDK_ROOT" \
+              "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+
+      # Generate a Gradle wrapper INSIDE your project (the zip I built didn’t include it)
+      - name: Generate Gradle wrapper
+        working-directory: FrassPredictorApp
+        run: |
+          gradle -v
+          gradle wrapper --gradle-version 8.7
+
+      # Build the debug APK using the wrapper (proper, reproducible way)
+      - name: Build debug APK
+        working-directory: FrassPredictorApp
+        run: ./gradlew assembleDebug --no-daemon --stacktrace
+
+      - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: frass-apk
