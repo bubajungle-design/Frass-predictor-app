@@ -10,31 +10,22 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    # Use a container that already has Android SDK + Gradle
+    container: mingc/android-build-box:1.17.0
 
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
 
       - name: Install unzip
-        run: sudo apt-get update && sudo apt-get install -y unzip
+        run: apt-get update && apt-get install -y unzip
 
       - name: Unzip project
         run: unzip -q FrassPredictorApp.zip
 
-      - name: Set up JDK 17
-        uses: actions/setup-java@v4
-        with:
-          distribution: 'temurin'
-          java-version: '17'
-          cache: 'gradle'
-
-      - name: Make gradlew executable
+      - name: Build debug APK (using preinstalled Gradle)
         working-directory: FrassPredictorApp
-        run: chmod +x ./gradlew
-
-      - name: Build debug APK
-        working-directory: FrassPredictorApp
-        run: ./gradlew assembleDebug
+        run: gradle assembleDebug --no-daemon
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
