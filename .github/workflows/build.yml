@@ -10,20 +10,69 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    # Use a container that already has Android SDK + Gradle
-    container: mingc/android-build-box:1.17.0
+    # Use a container that already has Gradle 8.7 + JDK 17
+    container: gradle:8.7-jdk17
+
+    env:
+      ANDROID_HOME: /android-sdk
+      ANDROID_SDK_ROOT: /android-sdk
+      ANDROID_NDK_HOME: /android-sdk/ndk-bundle
+      JAVA_HOME: /usr/local/openjdk-17
 
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
 
-      - name: Install unzip
-        run: apt-get update && apt-get install -y unzip
+      - name: Install tools
+        run: |
+          apt-get update
+          apt-get install -y unzip wget git
 
       - name: Unzip project
         run: unzip -q FrassPredictorApp.zip
 
-      - name: Build debug APK (using preinstalled Gradle)
+      # Patch settings.gradle.kts to add explicit plugin versions (AGP + Kotlin)
+      - name: Patch settings.gradle.kts (add plugin versions)
+        working-directory: FrassPredictorApp
+        run: |
+          cat > settings.gradle.kts <<'EOF'
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+              plugins {
+                  id("com.android.application") version "8.6.1"
+                  id("org.jetbrains.kotlin.android") version "1.9.24"
+              }
+          }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+          rootProject.name = "FrassPredictorApp"
+          include(":app")
+          EOF
+
+      # Install Android commandline tools + SDK packages
+      - name: Install Android SDK
+        run: |
+          SDK_URL="https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip"
+          mkdir -p ${ANDROID_SDK_ROOT}/cmdline-tools
+          cd ${ANDROID_SDK_ROOT}/cmdline-tools
+          wget -q ${SDK_URL} -O cmdline-tools.zip
+          mkdir -p latest
+          unzip -q cmdline-tools.zip -d latest
+          rm cmdline-tools.zip
+          yes | ${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager --sdk_root=${ANDROID_SDK_ROOT} --licenses
+          ${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager --sdk_root=${ANDROID_SDK_ROOT} "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+
+      # Build using Gradle 8.7 (from the container)
+      - name: Build debug APK
         working-directory: FrassPredictorApp
         run: gradle assembleDebug --no-daemon
 
